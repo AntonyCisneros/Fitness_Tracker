@@ -1,7 +1,7 @@
 import 'package:equatable/equatable.dart';
+import 'package:geolocator/geolocator.dart';
 import 'dart:math' as math;
 
-/// Punto de ubicación GPS
 class LocationPoint extends Equatable {
   final double latitude;
   final double longitude;
@@ -19,20 +19,33 @@ class LocationPoint extends Equatable {
     required this.timestamp,
   });
 
+  factory LocationPoint.fromPosition(Position position) {
+    return LocationPoint(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      altitude: position.altitude,
+      speed: position.speed,
+      accuracy: position.accuracy,
+      timestamp: position.timestamp,
+    );
+  }
+
   factory LocationPoint.fromMap(Map<dynamic, dynamic> map) {
+    final alt = map['altitude'];
+    final spd = map['speed'];
+    final acc = map['accuracy'];
     return LocationPoint(
       latitude: (map['latitude'] as num).toDouble(),
       longitude: (map['longitude'] as num).toDouble(),
-      altitude: (map['altitude'] as num?)?.toDouble() ?? 0,
-      speed: (map['speed'] as num?)?.toDouble() ?? 0,
-      accuracy: (map['accuracy'] as num?)?.toDouble() ?? 0,
+      altitude: alt is num ? alt.toDouble() : 0.0,
+      speed: spd is num ? spd.toDouble() : 0.0,
+      accuracy: acc is num ? acc.toDouble() : 0.0,
       timestamp: DateTime.now(),
     );
   }
 
-  /// Calcular distancia a otro punto (fórmula Haversine)
   double distanceTo(LocationPoint other) {
-    const earthRadius = 6371000.0; // metros
+    const earthRadius = 6371000.0;
 
     final lat1Rad = latitude * math.pi / 180;
     final lat2Rad = other.latitude * math.pi / 180;
@@ -52,7 +65,6 @@ class LocationPoint extends Equatable {
   List<Object?> get props => [latitude, longitude, timestamp];
 }
 
-/// Representa una ruta completa
 class Route {
   final List<LocationPoint> points;
   final DateTime startTime;

@@ -2,25 +2,41 @@ import 'package:flutter/material.dart' hide Route;
 import 'dart:async';
 import '../../data/datasources/gps_datasource.dart';
 import '../../domain/entities/location_point.dart';
+import '../../../../core/theme/app_theme.dart';
 
 class RouteMapWidget extends StatefulWidget {
-  const RouteMapWidget({super.key});
+  final void Function(double distanceKm, int durationMinutes, double estimatedCalories)? onStop;
+
+  const RouteMapWidget({super.key, this.onStop});
 
   @override
   State<RouteMapWidget> createState() => _RouteMapWidgetState();
 }
 
-class _RouteMapWidgetState extends State<RouteMapWidget> {
+class _RouteMapWidgetState extends State<RouteMapWidget>
+    with TickerProviderStateMixin {
   final GpsDataSource _dataSource = GpsDataSourceImpl();
   final Route _route = Route();
 
   StreamSubscription<LocationPoint>? _subscription;
   bool _isTracking = false;
-  String _statusMessage = 'Presiona Iniciar';
+  String _statusMessage = 'Presiona Iniciar para comenzar';
+
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
+  }
 
   @override
   void dispose() {
     _subscription?.cancel();
+    _pulseController.dispose();
     super.dispose();
   }
 
@@ -35,151 +51,199 @@ class _RouteMapWidgetState extends State<RouteMapWidget> {
   Future<void> _startTracking() async {
     final hasPermission = await _dataSource.requestPermissions();
     if (!hasPermission) {
-      setState(() {
-        _statusMessage = 'Permisos denegados';
-      });
+      setState(() => _statusMessage = 'Permisos de ubicación denegados');
       return;
     }
 
     final gpsEnabled = await _dataSource.isGpsEnabled();
     if (!gpsEnabled) {
-      setState(() {
-        _statusMessage = 'Activa el GPS';
-      });
+      setState(() => _statusMessage = 'Activa el GPS para continuar');
       return;
     }
 
     _subscription = _dataSource.locationStream.listen(
       (point) {
-        print('📍 GPS: ${point.latitude}, ${point.longitude}, acc=${point.accuracy}m');
-
         if (_route.points.isEmpty) {
           setState(() {
             _route.addPoint(point);
-            _statusMessage = 'Tracking - ${_route.points.length} puntos';
+            _statusMessage = '${_route.points.length} puntos registrados';
           });
         } else {
           final lastPoint = _route.points.last;
           final distance = lastPoint.distanceTo(point);
-
           if (distance >= 1) {
             setState(() {
               _route.addPoint(point);
-              _statusMessage = 'Tracking - ${_route.points.length} puntos';
+              _statusMessage = '${_route.points.length} puntos registrados';
             });
           }
         }
       },
       onError: (error) {
-        print('❌ GPS Error: $error');
-        setState(() {
-          _statusMessage = 'Error: $error';
-        });
+        setState(() => _statusMessage = 'Error: $error');
       },
     );
 
-    setState(() {
-      _isTracking = true;
-    });
+    _pulseController.repeat(reverse: true);
+    setState(() => _isTracking = true);
   }
 
   void _stopTracking() {
     _subscription?.cancel();
     _route.finish();
+    _pulseController.stop();
+
+    if (widget.onStop != null) {
+      widget.onStop!(
+        _route.distanceKm,
+        _route.duration.inMinutes,
+        _route.estimatedCalories,
+      );
+    }
 
     setState(() {
       _isTracking = false;
-      _statusMessage = 'Ruta finalizada';
+      _statusMessage = 'Ruta finalizada · ${_route.distanceKm.toStringAsFixed(2)} km';
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    Responsive.init(context);
+    final mapHeight = Responsive.h(24).clamp(160.0, 240.0);
+
+    return GlassCard(
+      padding: EdgeInsets.all(Responsive.w(5).clamp(16, 22)),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Ruta GPS',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(Responsive.w(2).clamp(6, 10)),
+                    decoration: BoxDecoration(
+                      color: AppColors.accent.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    ElevatedButton.icon(
-                      onPressed: _toggleTracking,
-                      icon: Icon(_isTracking ? Icons.stop : Icons.play_arrow),
-                      label: Text(_isTracking ? 'Detener' : 'Iniciar'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _isTracking ? Colors.red : Colors.green,
-                        foregroundColor: Colors.white,
-                      ),
+                    child: Icon(
+                      Icons.map,
+                      color: AppColors.accent,
+                      size: Responsive.w(5).clamp(18, 24),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _statusMessage,
-                  style: TextStyle(
-                    color: _isTracking ? Colors.green : Colors.grey,
-                    fontSize: 12,
+                  ),
+                  SizedBox(width: Responsive.w(2.5).clamp(8, 14)),
+                  Text(
+                    'Ruta GPS',
+                    style: TextStyle(
+                      fontSize: Responsive.sp(16).clamp(14, 19),
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              _buildTrackButton(),
+            ],
+          ),
+          SizedBox(height: Responsive.h(1.2).clamp(8, 14)),
+          Row(
+            children: [
+              if (_isTracking)
+                AnimatedBuilder(
+                  animation: _pulseController,
+                  builder: (context, child) => Container(
+                    width: 8,
+                    height: 8,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.success,
+                      borderRadius: BorderRadius.circular(4),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.success.withValues(
+                              alpha: 0.3 + _pulseController.value * 0.4),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ],
-            ),
+              Expanded(
+                child: Text(
+                  _statusMessage,
+                  style: TextStyle(
+                    color: _isTracking ? AppColors.success : AppColors.textMuted,
+                    fontSize: Responsive.sp(11).clamp(10, 13),
+                    fontWeight: _isTracking ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
+          SizedBox(height: Responsive.h(1.8).clamp(12, 18)),
 
-          // Mapa (Canvas)
+          // Canvas del mapa con altura proporcional
           Container(
-            height: 200,
-            margin: const EdgeInsets.symmetric(horizontal: 16),
+            height: mapHeight,
             decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[300]!),
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.glassBorder, width: 1),
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
               child: CustomPaint(
-                painter: RoutePainter(route: _route),
+                painter: RoutePainter(route: _route, isTracking: _isTracking),
                 size: Size.infinite,
               ),
             ),
           ),
 
-          const SizedBox(height: 16),
+          SizedBox(height: Responsive.h(2).clamp(14, 20)),
 
-          // Métricas
-          Padding(
-            padding: const EdgeInsets.all(16),
+          // Métricas con Wrap para evitar overflow
+          Container(
+            padding: EdgeInsets.symmetric(
+              vertical: Responsive.h(1.8).clamp(12, 18),
+              horizontal: Responsive.w(2).clamp(8, 14),
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.surface.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(16),
+            ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 _buildMetric(
                   icon: Icons.straighten,
-                  value: '${_route.distanceKm.toStringAsFixed(2)} km',
+                  value: _route.distanceKm.toStringAsFixed(2),
+                  unit: 'km',
                   label: 'Distancia',
                 ),
+                _buildDivider(),
                 _buildMetric(
                   icon: Icons.timer,
                   value: _formatDuration(_route.duration),
+                  unit: '',
                   label: 'Tiempo',
                 ),
+                _buildDivider(),
                 _buildMetric(
                   icon: Icons.speed,
-                  value: '${_route.averageSpeed.toStringAsFixed(1)} km/h',
+                  value: _route.averageSpeed.toStringAsFixed(1),
+                  unit: 'km/h',
                   label: 'Velocidad',
                 ),
+                _buildDivider(),
                 _buildMetric(
                   icon: Icons.local_fire_department,
-                  value: '${_route.estimatedCalories.toStringAsFixed(0)}',
+                  value: _route.estimatedCalories.toStringAsFixed(0),
+                  unit: 'cal',
                   label: 'Calorías',
                 ),
               ],
@@ -190,18 +254,113 @@ class _RouteMapWidgetState extends State<RouteMapWidget> {
     );
   }
 
+  Widget _buildTrackButton() {
+    return GestureDetector(
+      onTap: _toggleTracking,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.symmetric(
+          horizontal: Responsive.w(3.5).clamp(12, 18),
+          vertical: Responsive.w(2.2).clamp(8, 12),
+        ),
+        decoration: BoxDecoration(
+          gradient: _isTracking
+              ? const LinearGradient(
+                  colors: [AppColors.danger, Color(0xFFDC2626)],
+                )
+              : const LinearGradient(
+                  colors: [AppColors.accent, Color(0xFF0891B2)],
+                ),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: (_isTracking ? AppColors.danger : AppColors.accent)
+                  .withValues(alpha: 0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _isTracking ? Icons.stop_rounded : Icons.play_arrow_rounded,
+              color: Colors.white,
+              size: Responsive.w(4).clamp(16, 20),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _isTracking ? 'Detener' : 'Iniciar',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: Responsive.sp(12).clamp(11, 14),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildMetric({
     required IconData icon,
     required String value,
+    required String unit,
     required String label,
   }) {
-    return Column(
-      children: [
-        Icon(icon, color: const Color(0xFF6366F1)),
-        const SizedBox(height: 4),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-      ],
+    return Expanded(
+      child: Column(
+        children: [
+          Icon(icon, color: AppColors.primaryLight, size: Responsive.w(5).clamp(18, 22)),
+          SizedBox(height: Responsive.h(0.6).clamp(4, 8)),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: Text(
+                  value,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: Responsive.sp(15).clamp(13, 17),
+                    color: AppColors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (unit.isNotEmpty)
+                Text(
+                  ' $unit',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: Responsive.sp(10).clamp(9, 11),
+                    color: AppColors.textMuted.withValues(alpha: 0.8),
+                  ),
+                ),
+            ],
+          ),
+          SizedBox(height: Responsive.h(0.3).clamp(2, 4)),
+          Text(
+            label,
+            style: TextStyle(
+              color: AppColors.textMuted.withValues(alpha: 0.7),
+              fontSize: Responsive.sp(10).clamp(9, 11),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDivider() {
+    return Container(
+      height: Responsive.h(3.5).clamp(24, 36),
+      width: 1,
+      color: AppColors.glassBorder,
     );
   }
 
@@ -217,19 +376,22 @@ class _RouteMapWidgetState extends State<RouteMapWidget> {
   }
 }
 
-/// CustomPainter para dibujar la ruta
 class RoutePainter extends CustomPainter {
   final Route route;
+  final bool isTracking;
 
-  RoutePainter({required this.route});
+  RoutePainter({required this.route, this.isTracking = false});
 
   @override
   void paint(Canvas canvas, Size size) {
     if (route.points.isEmpty) {
       final textPainter = TextPainter(
-        text: const TextSpan(
-          text: 'Sin datos de ruta',
-          style: TextStyle(color: Colors.grey, fontSize: 14),
+        text: TextSpan(
+          text: isTracking ? 'Registrando ruta...' : 'Sin datos de ruta',
+          style: TextStyle(
+            color: AppColors.textMuted.withValues(alpha: 0.5),
+            fontSize: 14,
+          ),
         ),
         textDirection: TextDirection.ltr,
       );
@@ -244,7 +406,6 @@ class RoutePainter extends CustomPainter {
       return;
     }
 
-    // Calcular bounds
     double minLat = route.points.first.latitude;
     double maxLat = route.points.first.latitude;
     double minLon = route.points.first.longitude;
@@ -257,7 +418,7 @@ class RoutePainter extends CustomPainter {
       if (point.longitude > maxLon) maxLon = point.longitude;
     }
 
-    final padding = 20.0;
+    final padding = size.width * 0.06;
     final drawWidth = size.width - padding * 2;
     final drawHeight = size.height - padding * 2;
 
@@ -275,9 +436,16 @@ class RoutePainter extends CustomPainter {
       return Offset(x + padding, y + padding);
     }
 
-    // Dibujar línea
+    final glowPaint = Paint()
+      ..color = AppColors.primary.withValues(alpha: 0.3)
+      ..strokeWidth = 10
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+
     final linePaint = Paint()
-      ..color = const Color(0xFF6366F1)
+      ..color = AppColors.primary
       ..strokeWidth = 4
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
@@ -291,19 +459,29 @@ class RoutePainter extends CustomPainter {
       path.lineTo(pixel.dx, pixel.dy);
     }
 
+    canvas.drawPath(path, glowPaint);
     canvas.drawPath(path, linePaint);
 
-    // Punto inicio (verde)
-    final startPaint = Paint()..color = Colors.green;
+    final startPaint = Paint()..color = AppColors.success;
     canvas.drawCircle(toPixel(route.points.first), 8, startPaint);
+    final startRingPaint = Paint()
+      ..color = AppColors.success.withValues(alpha: 0.3)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    canvas.drawCircle(toPixel(route.points.first), 12, startRingPaint);
 
-    // Punto final (rojo)
-    final endPaint = Paint()..color = Colors.red;
+    final endPaint = Paint()..color = AppColors.danger;
     canvas.drawCircle(toPixel(route.points.last), 8, endPaint);
+    final endRingPaint = Paint()
+      ..color = AppColors.danger.withValues(alpha: 0.3)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    canvas.drawCircle(toPixel(route.points.last), 12, endRingPaint);
   }
 
   @override
   bool shouldRepaint(RoutePainter oldDelegate) {
-    return oldDelegate.route.points.length != route.points.length;
+    return oldDelegate.route.points.length != route.points.length ||
+        oldDelegate.isTracking != isTracking;
   }
 }
